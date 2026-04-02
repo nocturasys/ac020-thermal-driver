@@ -1,0 +1,116 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay — AC020 Thermal Camera on CAM1 (default)
+ * Raspberry Pi CM5 / Pi 5  (RP1 CSI receiver, Linux 6.6.y)
+ *
+ * CAM1 is the standard single-camera FPC connector on the Pi 5 and
+ * on most CM5 carrier boards.  The I2C bus is i2c_csi_dsi and the
+ * CSI receiver node is csi1.
+ *
+ * Install:
+ *   sudo dtc -@ -I dts -O dtb -o ac020-thermal-cam1.dtbo ac020-thermal-cam1.dts
+ *   sudo cp ac020-thermal-cam1.dtbo /boot/overlays/
+ *
+ * Enable in /boot/config.txt:
+ *   dtoverlay=ac020-thermal-cam1
+ *
+ * Optional parameters (append to dtoverlay= line):
+ *   ,mode=1        — switch to 1280×1024 (default: 0 = 640×512)
+ *   ,fps=25        — frame rate hint      (default: 30)
+ *
+ * After boot, verify with:
+ *   media-ctl -p -d /dev/media0
+ *   v4l2-ctl --list-formats-ext -d /dev/video0
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";   /* Raspberry Pi 5 / CM5 */
+
+	/* ---------------------------------------------------------- */
+	/* Fragment 0: register the sensor on the CSI I2C bus          */
+	/* ---------------------------------------------------------- */
+	i2c_frag: fragment@0 {
+		target = <&i2c_csi_dsi>;   /* CAM1 I2C bus             */
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells    = <0>;
+			status         = "okay";
+
+			ac020: ac020@3c {
+				compatible = "thermal_cam,ac020-mipi";
+				reg        = <0x3c>;   /* 7-bit I2C address    */
+				status     = "okay";
+
+				/*
+				 * The camera has its own ISP and clock
+				 * generator — no external clock or regulator
+				 * supply nodes are needed.
+				 */
+
+				port {
+					ac020_ep: endpoint {
+						/* must match csi1_ep below */
+						remote-endpoint = <&csi1_ep>;
+
+						/*
+						 * 2 data lanes — camera is
+						 * hardwired for 2-lane MIPI
+						 */
+						data-lanes = <1 2>;
+
+						/*
+						 * Camera uses non-continuous
+						 * (LP-11 between frames) clock
+						 */
+						clock-noncontinuous;
+
+						/*
+						 * 80 MHz MIPI link frequency
+						 * (80 Mbit/s per lane)
+						 */
+						link-frequencies =
+							/bits/ 64 <80000000>;
+					};
+				};
+			};
+		};
+	};
+
+	/* ---------------------------------------------------------- */
+	/* Fragment 1: enable the RP1 CSI-2 receiver (CAM1 = csi1)    */
+	/* ---------------------------------------------------------- */
+	csi_frag: fragment@1 {
+		target = <&csi1>;
+		__overlay__ {
+			status = "okay";
+
+			port {
+				csi1_ep: endpoint {
+					remote-endpoint = <&ac020_ep>;
+					data-lanes      = <1 2>;
+					clock-noncontinuous;
+				};
+			};
+		};
+	};
+
+	/* ---------------------------------------------------------- */
+	/* Override table — allows run-time parameter adjustment       */
+	/* ---------------------------------------------------------- */
+	__overrides__ {
+		/*
+		 * Switch to CAM0 connector:
+		 *   dtoverlay=ac020-thermal-cam1,cam0
+		 *
+		 * This redirects both I2C and CSI targets to the
+		 * second (CAM0) connector nodes.
+		 */
+		cam0 = <&i2c_frag>, "target:0=", <&i2c_csi_dsi0>,
+		       <&csi_frag>,  "target:0=", <&csi0>,
+		       <&csi1_ep>,   "remote-endpoint:0=", <&csi0_ep>,
+		       <&ac020_ep>,  "remote-endpoint:0=", <&csi0_ep>;
+	};
+};
