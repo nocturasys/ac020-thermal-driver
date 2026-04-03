@@ -358,7 +358,7 @@ static void ac020_fill_fmt(struct v4l2_mbus_framefmt *fmt,
 {
 	fmt->width        = m->width;
 	fmt->height       = m->height;
-	fmt->code         = MEDIA_BUS_FMT_YUYV8_2X8;
+	fmt->code         = MEDIA_BUS_FMT_YUYV8_1X16;
 	fmt->colorspace   = V4L2_COLORSPACE_SRGB;
 	fmt->field        = V4L2_FIELD_NONE;
 	fmt->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
@@ -485,7 +485,7 @@ static int ac020_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
 	/* Image stream: YUV422 8-bit, VC=0, DT=0x1E */
 	fd->entry[0].flags        = V4L2_MBUS_FRAME_DESC_FL_LEN_MAX;
 	fd->entry[0].length       = priv->fmt.width * priv->fmt.height * 2;
-	fd->entry[0].pixelcode    = MEDIA_BUS_FMT_YUYV8_2X8;
+	fd->entry[0].pixelcode    = MEDIA_BUS_FMT_YUYV8_1X16;
 	fd->entry[0].stream       = 0;
 	fd->entry[0].bus.csi2.vc  = 0;
 	fd->entry[0].bus.csi2.dt  = 0x1e; /* MIPI CSI-2 DT_YUV422_8B */
@@ -516,7 +516,7 @@ static int ac020_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	if (code->index >= 1)
 		return -EINVAL;
-	code->code = MEDIA_BUS_FMT_YUYV8_2X8;
+	code->code = MEDIA_BUS_FMT_YUYV8_1X16;
 	return 0;
 }
 
@@ -524,7 +524,7 @@ static int ac020_enum_frame_sizes(struct v4l2_subdev *sd,
 				   struct v4l2_subdev_state *state,
 				   struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->code != MEDIA_BUS_FMT_YUYV8_2X8)
+	if (fse->code != MEDIA_BUS_FMT_YUYV8_1X16)
 		return -EINVAL;
 	if (fse->index >= ARRAY_SIZE(ac020_modes))
 		return -EINVAL;
@@ -540,7 +540,7 @@ static int ac020_enum_frame_interval(struct v4l2_subdev *sd,
 {
 	if (fie->index >= 1)
 		return -EINVAL;
-	if (fie->code != MEDIA_BUS_FMT_YUYV8_2X8)
+	if (fie->code != MEDIA_BUS_FMT_YUYV8_1X16)
 		return -EINVAL;
 
 	fie->interval.numerator   = 1;
@@ -575,7 +575,7 @@ static int ac020_set_fmt(struct v4l2_subdev *sd,
 	u32 diff, best_diff = UINT_MAX;
 
 	/* Force the only supported mbus code */
-	fmt->format.code = MEDIA_BUS_FMT_YUYV8_2X8;
+	fmt->format.code = MEDIA_BUS_FMT_YUYV8_1X16;
 
 	/* Find the closest supported resolution */
 	for (i = 0; i < ARRAY_SIZE(ac020_modes); i++) {
