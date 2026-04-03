@@ -153,7 +153,7 @@ static u8 start_cmd[28] = {
 	0x00, 0x00,               /* reserved                            */
 };
 
-static u8 stop_cmd[28] = {
+static u8 __maybe_unused stop_cmd[28] = {
 	0x01, 0x30, 0xc2, 0x00,
 	0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
@@ -344,15 +344,21 @@ static int ac020_s_stream(struct v4l2_subdev *sd, int on)
 /* V4L2 subdev — pad ops                                               */
 /* ------------------------------------------------------------------ */
 
-static int ac020_init_cfg(struct v4l2_subdev *sd,
-			   struct v4l2_subdev_state *state)
+/*
+ * ac020_init_try_fmt — lazy initialiser for the per-fh try format.
+ * Called from get_fmt / set_fmt when the try format has not been set yet
+ * (width == 0).  In kernel 6.8+ init_cfg was removed from v4l2_subdev_pad_ops;
+ * v4l2_subdev_state_get_format() replaces v4l2_subdev_get_try_format().
+ */
+static void ac020_init_try_fmt(struct v4l2_subdev *sd,
+			       struct v4l2_subdev_state *state)
 {
-	struct v4l2_mbus_framefmt *fmt =
-		v4l2_subdev_get_try_format(sd, state, 0);
+	struct v4l2_mbus_framefmt *try_fmt =
+		v4l2_subdev_state_get_format(state, 0);
 
-	ac020_fill_fmt(fmt, &ac020_modes[clamp(mode, 0,
-				(int)ARRAY_SIZE(ac020_modes) - 1)]);
-	return 0;
+	if (!try_fmt->width)
+		ac020_fill_fmt(try_fmt, &ac020_modes[clamp(mode, 0,
+					(int)ARRAY_SIZE(ac020_modes) - 1)]);
 }
 
 static int ac020_enum_mbus_code(struct v4l2_subdev *sd,
@@ -400,7 +406,8 @@ static int ac020_get_fmt(struct v4l2_subdev *sd,
 	struct ac020 *ac020 = to_ac020(sd);
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
-		fmt->format = *v4l2_subdev_get_try_format(sd, state, 0);
+		ac020_init_try_fmt(sd, state);
+		fmt->format = *v4l2_subdev_state_get_format(state, 0);
 	} else {
 		mutex_lock(&ac020->lock);
 		fmt->format = ac020->fmt;
@@ -434,7 +441,7 @@ static int ac020_set_fmt(struct v4l2_subdev *sd,
 	ac020_fill_fmt(&fmt->format, new_mode);
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
-		*v4l2_subdev_get_try_format(sd, state, 0) = fmt->format;
+		*v4l2_subdev_state_get_format(state, 0) = fmt->format;
 	} else {
 		mutex_lock(&ac020->lock);
 		ac020->fmt      = fmt->format;
@@ -504,7 +511,7 @@ static const struct v4l2_subdev_video_ops ac020_video_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops ac020_pad_ops = {
-	.init_cfg            = ac020_init_cfg,
+	/* init_cfg removed in kernel 6.8 — try format initialised lazily */
 	.enum_mbus_code      = ac020_enum_mbus_code,
 	.enum_frame_size     = ac020_enum_frame_sizes,
 	.enum_frame_interval = ac020_enum_frame_interval,

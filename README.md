@@ -41,7 +41,9 @@ Camera control happens over **I2C** at address `0x3C`:
 ```bash
 # On the Pi CM5 (Raspberry Pi OS Bookworm 64-bit)
 sudo apt update
-sudo apt install -y raspberrypi-kernel-headers build-essential device-tree-compiler
+sudo apt install -y linux-headers-$(uname -r) build-essential device-tree-compiler
+# If the above fails (headers already bundled), just install the build tools:
+sudo apt install -y build-essential device-tree-compiler
 ```
 
 ---
