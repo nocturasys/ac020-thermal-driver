@@ -8,8 +8,8 @@
  * The Pi's own ISP is completely bypassed — frames arrive ready to use.
  *
  * Control interface:
- *   - I2C (addr 0x3C): proprietary command protocol with CRC16-CCITT
- *   - Start/stop streaming by writing a 28-byte command packet
+ *   - I2C (addr 0x3C): proprietary 18-byte command protocol with CRC16-CCITT
+ *   - Commands written to register 0x1D00, status read from 0x0200
  *   - Pass-through ioctl (CMD_GET / CMD_SET) for direct register access
  *
  * MIPI parameters:
@@ -58,8 +58,15 @@
 /* I2C command-protocol constants                                      */
 /* ------------------------------------------------------------------ */
 
-/* Write the 28-byte command packet to this 16-bit register address   */
+/* 18-byte command packet written to this register                     */
 #define AC020_CMD_REG       0x1D00
+/* Read 1 byte from here after every write to check completion         */
+#define AC020_STATUS_REG    0x0200
+
+/* Status byte bits (CMD_Status)                                       */
+#define AC020_STS_BUSY      BIT(0)  /* 0=idle, 1=busy                 */
+#define AC020_STS_FAIL      BIT(1)  /* 0=pass, 1=fail                 */
+#define AC020_STS_ERR_MASK  0xFC    /* error code in bits [7:2]        */
 
 /* ------------------------------------------------------------------ */
 /* Userspace pass-through ioctl                                        */
@@ -93,17 +100,14 @@ struct ac020_ioctl_data {
 /* Module parameters                                                   */
 /* ------------------------------------------------------------------ */
 
-static int mode;           /* 0=640x512, 1=1280x1024, 2=256x192, 3=384x288 */
+static int mode = 2;       /* 0=640x512, 1=1280x1024, 2=256x192, 3=384x288 */
 static int fps  = 25;
-static int img_type = 0x16; /* image-type byte in the start command   */
 
-module_param(mode,     int, 0644);
-module_param(fps,      int, 0644);
-module_param(img_type, int, 0644);
+module_param(mode, int, 0644);
+module_param(fps,  int, 0644);
 
-MODULE_PARM_DESC(mode,     "Resolution: 0=640x512, 1=1280x1024, 2=256x192 (default), 3=384x288");
-MODULE_PARM_DESC(fps,      "Frame rate (default: 25)");
-MODULE_PARM_DESC(img_type, "Image-type byte for start command (default: 0x16 = YUV)");
+MODULE_PARM_DESC(mode, "Resolution: 0=640x512, 1=1280x1024, 2=256x192 (default), 3=384x288");
+MODULE_PARM_DESC(fps,  "Frame rate in Hz: 25 (default), 30, 50");
 
 /* ------------------------------------------------------------------ */
 /* Supported resolutions                                               */
@@ -122,51 +126,44 @@ static const struct ac020_mode ac020_modes[] = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Command packets                                                     */
+/* Command packet builder                                              */
 /*                                                                     */
-/* Layout (28 bytes):                                                  */
-/*   [0-3]   Command header (0x01 0x30 0xC1/0xC2 0x00)               */
-/*   [4-11]  Reserved zeros                                            */
-/*   [12-13] Payload length (little-endian) = 0x000A (10 bytes)       */
-/*   [14-15] CRC16 of payload  [18-27]  (filled at stream start)      */
-/*   [16-17] CRC16 of header   [0-15]   (filled at stream start)      */
-/*   [18]    Path   0x00=start, 0x01=stop                             */
-/*   [19]    Image type  (overwritten from img_type module param)      */
-/*   [20]    Destination                                               */
-/*   [21]    FPS                                                       */
-/*   [22-23] Width  little-endian  (overwritten at stream start)      */
-/*   [24-25] Height little-endian  (overwritten at stream start)      */
-/*   [26-27] Reserved                                                  */
+/* VDCMD packet layout (18 bytes, written to register 0x1D00):        */
+/*   [0]     Command Class                                             */
+/*   [1]     Module Command Index                                      */
+/*   [2]     SubCmd                                                    */
+/*   [3]     Reserved (0x00)                                           */
+/*   [4-7]   Parameter 1  (Para1[0..3])                               */
+/*   [8-11]  Parameter 2  (Para2[0..3])                               */
+/*   [12-13] Expected response length (Len, little-endian)            */
+/*   [14-15] Reserved (0x00, 0x00)                                    */
+/*   [16-17] CRC16-CCITT over bytes [0..15]                           */
+/*                                                                     */
+/* After every write, poll register 0x0200 (CMD_Status):              */
+/*   bit[0] = 0 → IDLE   bit[0] = 1 → BUSY                           */
+/*   bit[1] = 0 → PASS   bit[1] = 1 → FAIL                           */
+/*   bits[7:2] = error code (0 = ok)                                  */
 /* ------------------------------------------------------------------ */
 
-static u8 start_cmd[28] = {
-	0x01, 0x30, 0xc1, 0x00,   /* header                              */
-	0x00, 0x00, 0x00, 0x00,   /* reserved                            */
-	0x00, 0x00, 0x00, 0x00,   /* reserved                            */
-	0x0a, 0x00,               /* payload length = 10                 */
-	0x00, 0x00,               /* [14-15] inner CRC placeholder       */
-	0x00, 0x00,               /* [16-17] outer CRC placeholder       */
-	0x00,                     /* [18] path: start                    */
-	0x16,                     /* [19] image type (overwritten)       */
-	0x03,                     /* [20] dst                            */
-	0x1e,                     /* [21] fps placeholder                */
-	0x80, 0x02,               /* [22-23] width  640 LE (overwritten) */
-	0x00, 0x02,               /* [24-25] height 512 LE (overwritten) */
-	0x00, 0x00,               /* reserved                            */
-};
+/* Command class / module IDs used in the init sequence               */
+#define AC020_CLS_CTRL   0x10   /* general control class              */
+#define AC020_MOD_SYS    0x10   /* system module                      */
+#define AC020_MOD_YUV    0x03   /* YUV format module                  */
 
-static u8 __maybe_unused stop_cmd[28] = {
-	0x01, 0x30, 0xc2, 0x00,
-	0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00,
-	0x0a, 0x00,
-	0x00, 0x00,               /* [14-15] inner CRC placeholder       */
-	0x00, 0x00,               /* [16-17] outer CRC placeholder       */
-	0x01,                     /* [18] path: stop                     */
-	0x16, 0x00, 0x0e,
-	0x80, 0x02, 0x00, 0x02,
-	0x00, 0x00,
-};
+/* SubCmd IDs                                                          */
+#define AC020_CMD_OUT_FMT  0x46 /* digital/MIPI output format         */
+#define AC020_CMD_DET_FPS  0x44 /* detector frame rate                */
+#define AC020_CMD_IMG_SRC  0x45 /* image data source                  */
+#define AC020_CMD_YUV_FMT  0x4D /* YUV sub-format (UYVY/YUYV/…)      */
+
+/* Para1[1] values for CMD_OUT_FMT                                    */
+#define AC020_OUTPUT_MIPI  0x03 /* MIPI progressive                   */
+
+/* Para1[0] for CMD_IMG_SRC                                           */
+#define AC020_SRC_YUV      0x05 /* YUV image output                   */
+
+/* Para1[0] for CMD_YUV_FMT                                           */
+#define AC020_YUYV         0x01 /* YUYV byte order                    */
 
 /* ------------------------------------------------------------------ */
 /* Driver private state                                                */
@@ -263,26 +260,93 @@ static int ac020_i2c_write(struct i2c_client *client,
 /* Command packet helpers                                              */
 /* ------------------------------------------------------------------ */
 
-static void ac020_prepare_cmd(u8 *cmd, const struct ac020_mode *m)
+/*
+ * Build an 18-byte VDCMD packet.
+ *   cls/mod/sub : command header bytes
+ *   p1[0..3]    : Parameter 1
+ *   p2[0..3]    : Parameter 2  (usually zeros)
+ *   resp_len    : expected response byte count (Len field)
+ * CRC16-CCITT is computed over bytes [0..15] and appended at [16..17].
+ */
+static void ac020_build_cmd(u8 out[18],
+			     u8 cls, u8 mod, u8 sub,
+			     u8 p1_0, u8 p1_1, u8 p1_2, u8 p1_3,
+			     u8 p2_0, u8 p2_1, u8 p2_2, u8 p2_3,
+			     u16 resp_len)
 {
 	u16 crc;
 
-	cmd[19] = (u8)img_type;
-	cmd[21] = (u8)clamp(fps, 1, 60);
-	cmd[22] = m->width  & 0xff;
-	cmd[23] = m->width  >> 8;
-	cmd[24] = m->height & 0xff;
-	cmd[25] = m->height >> 8;
+	out[0]  = cls;
+	out[1]  = mod;
+	out[2]  = sub;
+	out[3]  = 0x00;           /* reserved                            */
+	out[4]  = p1_0;
+	out[5]  = p1_1;
+	out[6]  = p1_2;
+	out[7]  = p1_3;
+	out[8]  = p2_0;
+	out[9]  = p2_1;
+	out[10] = p2_2;
+	out[11] = p2_3;
+	out[12] = resp_len & 0xff;
+	out[13] = resp_len >> 8;
+	out[14] = 0x00;           /* reserved                            */
+	out[15] = 0x00;           /* reserved                            */
 
-	/* Inner CRC: covers payload bytes [18..27] (10 bytes) */
-	crc = ac020_crc16(cmd + 18, 10);
-	cmd[14] = crc & 0xff;
-	cmd[15] = crc >> 8;
+	crc     = ac020_crc16(out, 16);
+	out[16] = crc & 0xff;
+	out[17] = crc >> 8;
+}
 
-	/* Outer CRC: covers header bytes [0..15] (16 bytes) */
-	crc = ac020_crc16(cmd, 16);
-	cmd[16] = crc & 0xff;
-	cmd[17] = crc >> 8;
+/*
+ * Poll CMD_Status register (0x0200) until the camera is idle.
+ * Returns 0 on success, -ETIMEDOUT if the camera stays busy, or
+ * -EIO if the command failed.
+ */
+static int ac020_wait_idle(struct i2c_client *client)
+{
+	u8 status;
+	int tries = 200;   /* 200 × 1 ms = 200 ms max                    */
+
+	do {
+		msleep(1);
+		if (ac020_i2c_read(client, AC020_STATUS_REG, &status, 1))
+			return -EIO;
+		if (!(status & AC020_STS_BUSY)) {
+			if (status & (AC020_STS_FAIL | AC020_STS_ERR_MASK)) {
+				dev_err(&client->dev,
+					"camera cmd failed, status=0x%02x\n",
+					status);
+				return -EIO;
+			}
+			return 0;
+		}
+	} while (--tries);
+
+	dev_err(&client->dev, "camera cmd timed out\n");
+	return -ETIMEDOUT;
+}
+
+/*
+ * Build, send, and wait for one 18-byte command.
+ */
+static int ac020_send_cmd(struct i2c_client *client,
+			   u8 cls, u8 mod, u8 sub,
+			   u8 p1_0, u8 p1_1, u8 p1_2, u8 p1_3)
+{
+	u8 pkt[18];
+	int ret;
+
+	ac020_build_cmd(pkt, cls, mod, sub,
+			p1_0, p1_1, p1_2, p1_3,
+			0, 0, 0, 0,   /* Para2 = zeros                   */
+			0);            /* no response expected for writes */
+
+	ret = ac020_i2c_write(client, AC020_CMD_REG, pkt, sizeof(pkt));
+	if (ret)
+		return ret;
+
+	return ac020_wait_idle(client);
 }
 
 /* ------------------------------------------------------------------ */
@@ -315,28 +379,65 @@ static int ac020_s_stream(struct v4l2_subdev *sd, int on)
 	mutex_lock(&ac020->lock);
 
 	if (on && !ac020->streaming) {
-		ac020_prepare_cmd(start_cmd, &ac020_modes[ac020->mode_idx]);
-		ret = ac020_i2c_write(client, AC020_CMD_REG,
-				      start_cmd, sizeof(start_cmd));
-		if (ret)
-			dev_err(&client->dev,
-				"failed to start streaming: %d\n", ret);
-		else
-			ac020->streaming = true;
+		u8 fps_byte = (u8)clamp(fps, 1, 60);
+
+		/*
+		 * Camera initialisation sequence:
+		 *  1. Image source → YUV  (processed image with pseudo-colour)
+		 *  2. YUV byte order → YUYV
+		 *  3. Detector frame rate
+		 *  4. Enable MIPI progressive output at the requested fps
+		 */
+		ret = ac020_send_cmd(client,
+				     AC020_CLS_CTRL, AC020_MOD_SYS,
+				     AC020_CMD_IMG_SRC,
+				     AC020_SRC_YUV, 0, 0, 0);
+		if (ret) {
+			dev_err(&client->dev, "set image source failed: %d\n", ret);
+			goto out;
+		}
+
+		ret = ac020_send_cmd(client,
+				     AC020_CLS_CTRL, AC020_MOD_YUV,
+				     AC020_CMD_YUV_FMT,
+				     AC020_YUYV, 0, 0, 0);
+		if (ret) {
+			dev_err(&client->dev, "set YUV format failed: %d\n", ret);
+			goto out;
+		}
+
+		ret = ac020_send_cmd(client,
+				     AC020_CLS_CTRL, AC020_MOD_SYS,
+				     AC020_CMD_DET_FPS,
+				     fps_byte, 0, 0, 0);
+		if (ret) {
+			dev_err(&client->dev, "set frame rate failed: %d\n", ret);
+			goto out;
+		}
+
+		/* Para1: [enabled=1] [output type=MIPI] [fps] [0] */
+		ret = ac020_send_cmd(client,
+				     AC020_CLS_CTRL, AC020_MOD_SYS,
+				     AC020_CMD_OUT_FMT,
+				     0x01, AC020_OUTPUT_MIPI, fps_byte, 0);
+		if (ret) {
+			dev_err(&client->dev, "enable MIPI output failed: %d\n", ret);
+			goto out;
+		}
+
+		ac020->streaming = true;
+		dev_dbg(&client->dev, "streaming started @ %d fps\n", fps);
 
 	} else if (!on && ac020->streaming) {
-		/*
-		 * The manufacturer notes that sending the stop command and
-		 * restarting takes a long time (camera re-initialises its ISP).
-		 * Uncomment the block below only if you need a hard stop and
-		 * are willing to accept the latency on next start.
-		 *
-		 * ac020_prepare_cmd(stop_cmd, &ac020_modes[ac020->mode_idx]);
-		 * ac020_i2c_write(client, AC020_CMD_REG,
-		 *                 stop_cmd, sizeof(stop_cmd));
-		 */
+		/* Disable all digital output (Para1[0] = 0x00) */
+		ac020_send_cmd(client,
+			       AC020_CLS_CTRL, AC020_MOD_SYS,
+			       AC020_CMD_OUT_FMT,
+			       0x00, 0, 0, 0);
 		ac020->streaming = false;
 	}
+
+out:
 
 	mutex_unlock(&ac020->lock);
 	return ret;
