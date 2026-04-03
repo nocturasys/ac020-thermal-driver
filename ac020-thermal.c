@@ -448,6 +448,52 @@ out:
 /* ------------------------------------------------------------------ */
 
 /*
+ * ac020_get_mbus_config — report MIPI bus parameters to the CSI receiver.
+ * The rp1-cfe uses this to configure the physical D-PHY layer.
+ */
+static int ac020_get_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
+				  struct v4l2_mbus_config *cfg)
+{
+	cfg->type = V4L2_MBUS_CSI2_DPHY;
+	cfg->bus.mipi_csi2.num_data_lanes = 2;
+	cfg->bus.mipi_csi2.flags = V4L2_MBUS_CSI2_NONCONTINUOUS_CLOCK;
+	return 0;
+}
+
+/*
+ * ac020_get_frame_desc — describe the MIPI CSI-2 streams this sensor produces.
+ *
+ * The rp1-cfe driver calls this at bind time to build its internal routing
+ * table.  Without it the CSI2 entity has no idea what streams are incoming
+ * and rejects every S_ROUTING / S_FMT call with -EINVAL.
+ *
+ * The AC020 outputs a single image stream on virtual channel 0 using
+ * MIPI data type 0x1E (YUV422 8-bit, standard MIPI CSI-2 spec §11.4).
+ */
+static int ac020_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
+				 struct v4l2_mbus_frame_desc *fd)
+{
+	struct ac020 *priv = to_ac020(sd);
+
+	if (pad != 0)
+		return -EINVAL;
+
+	fd->type = V4L2_MBUS_FRAME_DESC_TYPE_CSI2;
+	fd->num_entries = 1;
+	memset(fd->entry, 0, sizeof(fd->entry[0]));
+
+	/* Image stream: YUV422 8-bit, VC=0, DT=0x1E */
+	fd->entry[0].flags        = V4L2_MBUS_FRAME_DESC_FL_LEN_MAX;
+	fd->entry[0].length       = priv->fmt.width * priv->fmt.height * 2;
+	fd->entry[0].pixelcode    = MEDIA_BUS_FMT_YUYV8_2X8;
+	fd->entry[0].stream       = 0;
+	fd->entry[0].bus.csi2.vc  = 0;
+	fd->entry[0].bus.csi2.dt  = 0x1e; /* MIPI CSI-2 DT_YUV422_8B */
+
+	return 0;
+}
+
+/*
  * ac020_init_try_fmt — lazy initialiser for the per-fh try format.
  * Called from get_fmt / set_fmt when the try format has not been set yet
  * (width == 0).  In kernel 6.8+ init_cfg was removed from v4l2_subdev_pad_ops;
@@ -620,6 +666,8 @@ static const struct v4l2_subdev_pad_ops ac020_pad_ops = {
 	.enum_frame_interval = ac020_enum_frame_interval,
 	.get_fmt             = ac020_get_fmt,
 	.set_fmt             = ac020_set_fmt,
+	.get_mbus_config     = ac020_get_mbus_config,
+	.get_frame_desc      = ac020_get_frame_desc,
 };
 
 static const struct v4l2_subdev_ops ac020_subdev_ops = {
