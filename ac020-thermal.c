@@ -93,16 +93,16 @@ struct ac020_ioctl_data {
 /* Module parameters                                                   */
 /* ------------------------------------------------------------------ */
 
-static int mode;           /* 0 = 640×512 (default), 1 = 1280×1024   */
-static int fps  = 30;
+static int mode;           /* 0=640x512, 1=1280x1024, 2=256x192, 3=384x288 */
+static int fps  = 25;
 static int img_type = 0x16; /* image-type byte in the start command   */
 
 module_param(mode,     int, 0644);
 module_param(fps,      int, 0644);
 module_param(img_type, int, 0644);
 
-MODULE_PARM_DESC(mode,     "Resolution: 0=640x512 (default), 1=1280x1024");
-MODULE_PARM_DESC(fps,      "Frame rate (default: 30)");
+MODULE_PARM_DESC(mode,     "Resolution: 0=640x512, 1=1280x1024, 2=256x192 (default), 3=384x288");
+MODULE_PARM_DESC(fps,      "Frame rate (default: 25)");
 MODULE_PARM_DESC(img_type, "Image-type byte for start command (default: 0x16 = YUV)");
 
 /* ------------------------------------------------------------------ */
@@ -117,6 +117,8 @@ struct ac020_mode {
 static const struct ac020_mode ac020_modes[] = {
 	[0] = { .width = 640,  .height = 512  },
 	[1] = { .width = 1280, .height = 1024 },
+	[2] = { .width = 256,  .height = 192  },
+	[3] = { .width = 384,  .height = 288  },
 };
 
 /* ------------------------------------------------------------------ */
