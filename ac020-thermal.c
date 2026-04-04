@@ -380,6 +380,12 @@ static int ac020_s_stream(struct v4l2_subdev *sd, int on)
 
 	if (on && !ac020->streaming) {
 		u8 fps_byte = (u8)clamp(fps, 1, 60);
+		u8 status = 0xff;
+
+		/* Diagnose: I2C read test before sending commands */
+		ret = ac020_i2c_read(client, AC020_STATUS_REG, &status, 1);
+		dev_info(&client->dev, "I2C read test: status_reg=0x%02x ret=%d\n",
+			 status, ret);
 
 		/*
 		 * Camera initialisation sequence:
