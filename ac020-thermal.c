@@ -434,8 +434,6 @@ static int ac020_s_stream(struct v4l2_subdev *sd, int on)
 		ac020->streaming = false;
 	}
 
-out:
-
 	mutex_unlock(&ac020->lock);
 	return ret;
 }
