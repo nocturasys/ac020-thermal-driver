@@ -359,7 +359,7 @@ static void ac020_fill_fmt(struct v4l2_mbus_framefmt *fmt,
 	fmt->width        = m->width;
 	fmt->height       = m->height;
 	fmt->code         = MEDIA_BUS_FMT_YUYV8_1X16;
-	fmt->field        = V4L2_FIELD_NONE;
+	fmt->field        = V4L2_FIELD_ANY;
 	fmt->colorspace   = V4L2_COLORSPACE_DEFAULT;
 	fmt->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
 	fmt->quantization = V4L2_QUANTIZATION_DEFAULT;
