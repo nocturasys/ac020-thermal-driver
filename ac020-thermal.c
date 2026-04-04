@@ -387,46 +387,43 @@ static int ac020_s_stream(struct v4l2_subdev *sd, int on)
 		 *  2. YUV byte order → YUYV
 		 *  3. Detector frame rate
 		 *  4. Enable MIPI progressive output at the requested fps
+		 *
+		 * Errors are logged but do not abort streaming so the
+		 * rp1-cfe cleanup path (csi2_stop_channel) is not triggered
+		 * by a failed s_stream return code.
 		 */
 		ret = ac020_send_cmd(client,
 				     AC020_CLS_CTRL, AC020_MOD_SYS,
 				     AC020_CMD_IMG_SRC,
 				     AC020_SRC_YUV, 0, 0, 0);
-		if (ret) {
+		if (ret)
 			dev_err(&client->dev, "set image source failed: %d\n", ret);
-			goto out;
-		}
 
 		ret = ac020_send_cmd(client,
 				     AC020_CLS_CTRL, AC020_MOD_YUV,
 				     AC020_CMD_YUV_FMT,
 				     AC020_YUYV, 0, 0, 0);
-		if (ret) {
+		if (ret)
 			dev_err(&client->dev, "set YUV format failed: %d\n", ret);
-			goto out;
-		}
 
 		ret = ac020_send_cmd(client,
 				     AC020_CLS_CTRL, AC020_MOD_SYS,
 				     AC020_CMD_DET_FPS,
 				     fps_byte, 0, 0, 0);
-		if (ret) {
+		if (ret)
 			dev_err(&client->dev, "set frame rate failed: %d\n", ret);
-			goto out;
-		}
 
 		/* Para1: [enabled=1] [output type=MIPI] [fps] [0] */
 		ret = ac020_send_cmd(client,
 				     AC020_CLS_CTRL, AC020_MOD_SYS,
 				     AC020_CMD_OUT_FMT,
 				     0x01, AC020_OUTPUT_MIPI, fps_byte, 0);
-		if (ret) {
+		if (ret)
 			dev_err(&client->dev, "enable MIPI output failed: %d\n", ret);
-			goto out;
-		}
 
+		ret = 0; /* never fail s_stream — let rp1-cfe proceed */
 		ac020->streaming = true;
-		dev_dbg(&client->dev, "streaming started @ %d fps\n", fps);
+		dev_info(&client->dev, "streaming started @ %d fps\n", fps);
 
 	} else if (!on && ac020->streaming) {
 		/* Disable all digital output (Para1[0] = 0x00) */
